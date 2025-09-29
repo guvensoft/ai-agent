@@ -8,8 +8,19 @@ from rag_core import get_retriever, to_retrieved_chunks, build_context_block, re
 from settings import LLM_MODEL, TOP_K
 from agent.agent_main import build_agent
 from repo_ingest import main as ingest_repo
-from dev_workflow import make_plan, make_plan_files, apply_plan, apply_plan_files, revert_commit, get_plan_hunks, apply_plan_hunks
+from dev_workflow import (
+    make_plan,
+    make_plan_files,
+    apply_plan,
+    apply_plan_files,
+    revert_commit,
+    get_plan_hunks,
+    apply_plan_hunks,
+    implement_plan,
+    verify_plan,
+)
 from orchestrator import sandbox_test_plan, create_plan, get_plan
+from implementer import PatchValidationError
 
 app = FastAPI(title="Repo Doc Chat + Dev Agent", version="0.5.0")
 _agent = None
@@ -29,10 +40,25 @@ def repo_ingest():
 class PlanReq(BaseModel):
     request: str
 
+
 @app.post("/dev/plan")
 def dev_plan(req: PlanReq):
     res = make_plan(req.request)
     return JSONResponse(res)
+
+
+class ImplementReq(BaseModel):
+    plan_id: str
+    feedback: Optional[str] = None
+
+
+@app.post("/dev/implement")
+def dev_implement(req: ImplementReq):
+    try:
+        res = implement_plan(req.plan_id, feedback=req.feedback)
+        return JSONResponse(res)
+    except PatchValidationError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
 
 
 class SandboxReq(BaseModel):
@@ -89,6 +115,18 @@ class ApplyReq(BaseModel):
 @app.post("/dev/apply")
 def dev_apply(req: ApplyReq):
     res = apply_plan(req.plan_id)
+    return JSONResponse(res)
+
+
+class VerifyReq(BaseModel):
+    plan_id: str
+    auto_fix: Optional[bool] = True
+    max_rounds: Optional[int] = 3
+
+
+@app.post("/dev/verify")
+def dev_verify(req: VerifyReq):
+    res = verify_plan(req.plan_id, auto_fix=req.auto_fix, max_rounds=req.max_rounds)
     return JSONResponse(res)
 
 class ApplyFilesReq(BaseModel):
