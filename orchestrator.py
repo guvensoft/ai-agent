@@ -6,7 +6,8 @@ import tempfile
 import shutil
 import subprocess
 import os
-from typing import Dict, Any
+import shlex
+from typing import Dict, Any, List, Optional
 from settings import REPO_ROOT, GIT_COMMIT_AUTHOR, GIT_COMMIT_MESSAGE, CHROMA_DIR
 from dev_workflow import PLANS_DIR, apply_patch_text
 from git import Repo, InvalidGitRepositoryError
@@ -50,7 +51,60 @@ def _apply_patch_via_git_apply(patch_text: str, wd: str) -> Dict[str, Any]:
         except Exception:
             pass
 
-def sandbox_test_plan(plan_id: str, timeout_seconds: int = 300) -> Dict[str, Any]:
+def _run_extra_commands(wd: str, commands: List[Any]) -> List[Dict[str, Any]]:
+    """Run additional validation commands inside ``wd``."""
+    results: List[Dict[str, Any]] = []
+    for entry in commands:
+        if isinstance(entry, dict):
+            name = entry.get("name") or entry.get("cmd")
+            cmd = entry.get("cmd")
+        else:
+            name = str(entry)
+            cmd = entry
+        if not cmd:
+            continue
+        if isinstance(cmd, str):
+            cmd_list = shlex.split(cmd)
+        else:
+            cmd_list = list(cmd)
+        try:
+            proc = subprocess.run(cmd_list, cwd=wd, capture_output=True, text=True)
+            results.append(
+                {
+                    "name": name,
+                    "cmd": cmd_list,
+                    "returncode": proc.returncode,
+                    "stdout": proc.stdout,
+                    "stderr": proc.stderr,
+                    "status": "passed" if proc.returncode == 0 else "failed",
+                }
+            )
+        except FileNotFoundError as exc:
+            results.append(
+                {
+                    "name": name,
+                    "cmd": cmd_list,
+                    "returncode": None,
+                    "stdout": "",
+                    "stderr": str(exc),
+                    "status": "not_found",
+                }
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            results.append(
+                {
+                    "name": name,
+                    "cmd": cmd_list,
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": str(exc),
+                    "status": "error",
+                }
+            )
+    return results
+
+
+def sandbox_test_plan(plan_id: str, timeout_seconds: int = 300, extra_commands: Optional[List[Any]] = None) -> Dict[str, Any]:
     """
     Sandbox-run the plan's patch and tests.
     If repo at REPO_ROOT is a git repo, use a new branch there and git apply (no commit), run tests, then restore.
@@ -101,6 +155,9 @@ def sandbox_test_plan(plan_id: str, timeout_seconds: int = 300) -> Dict[str, Any
                 return {"plan_id": plan_id, "applied": False, "error": "git apply failed", "apply": apply_res}
             # run tests (no commit)
             test_res = run_tests_in_dir(str(REPO_ROOT), timeout=timeout_seconds)
+            extra_results: List[Dict[str, Any]] = []
+            if extra_commands:
+                extra_results = _run_extra_commands(str(REPO_ROOT), extra_commands)
             # restore branch and remove sandbox branch
             try:
                 repo.git.checkout(orig_branch)
@@ -108,7 +165,7 @@ def sandbox_test_plan(plan_id: str, timeout_seconds: int = 300) -> Dict[str, Any
                     repo.git.branch("-D", sandbox_branch)
             except Exception:
                 pass
-            return {"plan_id": plan_id, "applied": True, "tests": test_res}
+            return {"plan_id": plan_id, "applied": True, "tests": test_res, "extra_checks": extra_results}
         except Exception as e:
             return {"plan_id": plan_id, "applied": False, "error": str(e), "traceback": traceback.format_exc()}
     else:
@@ -146,7 +203,10 @@ def sandbox_test_plan(plan_id: str, timeout_seconds: int = 300) -> Dict[str, Any
                 return {"plan_id": plan_id, "applied": False, "error": "git apply failed in temp repo", "apply": apply_res}
             # run tests
             test_res = run_tests_in_dir(tmpd, timeout=timeout_seconds)
-            return {"plan_id": plan_id, "applied": True, "tests": test_res}
+            extra_results: List[Dict[str, Any]] = []
+            if extra_commands:
+                extra_results = _run_extra_commands(tmpd, extra_commands)
+            return {"plan_id": plan_id, "applied": True, "tests": test_res, "extra_checks": extra_results}
         except Exception as e:
             return {"plan_id": plan_id, "applied": False, "error": str(e), "traceback": traceback.format_exc()}
         finally:

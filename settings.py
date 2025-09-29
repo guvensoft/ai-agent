@@ -35,3 +35,11 @@ GIT_COMMIT_MESSAGE = "feat(agent): applied changes by agent"
 
 # Test command to run after applying patches. Adjust to your project's test command if needed.
 TEST_CMD = "pytest -q"
+
+# Optional static analysis commands executed during verification inside the sandbox.
+# Each entry can be either a shell string or a dict with "name" and "cmd" fields.
+STATIC_ANALYSIS_CMDS = [
+    {"name": "bandit", "cmd": ["bandit", "-q", "-r", "."]},
+    {"name": "semgrep", "cmd": ["semgrep", "--config", "auto"]},
+    {"name": "pyright", "cmd": ["pyright"]},
+]
